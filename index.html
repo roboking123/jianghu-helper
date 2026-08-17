@@ -1016,7 +1016,7 @@ button.brand{background:none;border:none;padding:0;cursor:pointer;
 <body>
 
 <header class="top">
-  <button class="btn plain brand" id="hHome" aria-label="回首頁">江湖助手 <span class="ver">1.3.0</span></button>
+  <button class="btn plain brand" id="hHome" aria-label="回首頁">江湖助手 <span class="ver">1.3.1</span></button>
   <button class="btn plain" id="hRpTop" type="button">問題回報</button>
 </header>
 
@@ -1330,7 +1330,6 @@ button.brand{background:none;border:none;padding:0;cursor:pointer;
 <main class="panes panel" id="sS" hidden>
   <div class="wide bar bar2">
     <button class="btn plain" id="seBack" aria-label="回首頁"><span class="arrow">←</span>首頁</button>
-    <button class="btn plain" id="sePoolGo">看招募池<span class="arrow">→</span></button>
   </div>
 
   <details class="box wide setbox" id="seNeed" open>
@@ -1358,7 +1357,7 @@ button.brand{background:none;border:none;padding:0;cursor:pointer;
       <div class="picker-grp boxed"><span class="grplab">派遣</span><div id="seOptTask" class="btns"></div></div>
       <div class="picker-grp boxed"><span class="grplab">洗特長</span><div id="seOptRoll" class="btns"></div></div>
       <div class="picker-grp boxed"><span class="grplab">掌門令</span><div id="seOptZhang" class="btns"></div></div>
-      <div class="picker-grp boxed"><span class="grplab">回復道具</span><div id="seOptItem" class="btns"></div></div>
+      <div id="seOptItem"></div>
       <div class="picker-grp boxed"><span class="grplab">招新人</span><div id="seOptNew" class="btns"></div></div>
     </div>
   </details>
@@ -8068,13 +8067,17 @@ const SECT_ROLL_DAYS = 2;
  */
 const SECT_ECON = {
   dayExp: 200,        // 弟子空閒時每天長的經驗
-  taskExp: 800,       // 有在派遣的話每人每天多長這些，見下面那段
   zhangDay: 10,       // 掌門令每天回幾點
-  zhangDayItem: 13,   // 帶著那個道具的話回這麼多
+  /* 北岳令這件鎮派之寶：每日額外恢復 5 點掌門令。〔問遊戲〕道具說明原文 */
+  zhangDayItem: 15,
   zhangMax: 100,      // 掌門令上限
   buyCd: 5,           // 買經驗幾天才能買一次
   /* 換一次特長之後要等一天，所以一天最多一次 */
   rerollPerDay: 1,
+  /* 舍利寶塔那件鎮派之寶：執行掌門令時冷卻時間縮減 30%。〔問遊戲〕道具說明原文 */
+  rerollCdCut: 0.3,
+  /* 戰神鼓那件鎮派之寶：所有弟子派遣戰力 +20%。〔問遊戲〕道具說明原文 */
+  taskPowerUp: 0.2,
   /* 招募池一天只能刷一次 */
   freshPerDay: 1,
   buy: [              // 花掌門令買經驗，每令換到的經驗越前面越划算
@@ -8082,6 +8085,19 @@ const SECT_ECON = {
     { zhang: 40, exp: 4000 },
   ],
 };
+
+/*
+ * 鎮派之寶裡會動到這套算式的三件。其餘的給的是掉落與收益，跟天數無關。
+ *
+ * **同時最多掛三件**，這是遊戲的位子上限。以後再認出更多件也一樣是三件，
+ * 所以上限寫在這裡一次，畫面照著擋，不要在畫面那邊各寫各的。
+ */
+const SECT_TREASURE_MAX = 3;
+const SECT_TREASURES = [
+  { key: 'beiyue', name: '北岳令' },
+  { key: 'sheli', name: '舍利寶塔' },
+  { key: 'zhangu', name: '戰神鼓' },
+];
 
 /*
  * 每天刷出來的派遣任務。滿等之後固定這個樣子：紫的三個、藍的兩個。
@@ -8120,7 +8136,9 @@ function sectTaskRate(powers, sps, need, fit) {
 /*
  * 一天的派遣怎麼排。
  *
- * 位子有限（紫三個各四人、藍兩個各三人，一共十八個），所以要挑人。
+ * 一天刷五個任務，紫三個各四人、藍兩個各三人，一共十八個位子。
+ * **同一個人一天接幾個任務沒有上限，但同一個任務裡只占得了一個位子**，
+ * 所以人少的時候一個人可以五個任務全接，一天拿五份經驗。
  *
  * 挑法：**等級低的優先上**。低等弟子每升一級都在推自己那條序列，
  * 推演步數變多、換到目標的機會就多；滿級的那些升不動，經驗餵給他們是浪費。
@@ -8130,7 +8148,6 @@ function sectTaskRate(powers, sps, need, fit) {
 function sectDispatch(people, opt) {
   const o = Object.assign({ tasks: SECT_DAILY_TASKS }, opt || {});
   const 得到 = new Map();
-  const 用過 = new Set();
   const 排 = [];
   /*
    * 低的先上。這次規劃有指名要升級的再往前挪一點，
@@ -8142,6 +8159,8 @@ function sectDispatch(people, opt) {
   for (const t of o.tasks) {
     for (let n = 0; n < t.幾個; n++) {
       const 隊 = [];
+      /* 一個任務裡同一個人只能占一個位子，所以這份名單每個任務重來 */
+      const 用過 = new Set();
       /* 先找一個扛得動門檻的壓陣。找不到就整隊硬上，成功率自己會反映 */
       const 帶隊 = 壯丁.find(p => !用過.has(p.name) && p.power >= t.門檻);
       if (帶隊) { 隊.push(帶隊); 用過.add(帶隊.name); }
@@ -8175,9 +8194,24 @@ function sectPower(level, weaponLv, armorLv) {
   return lv + w + a;
 }
 
-function sectDayExp(econ, 有派遣) {
+function sectIdleBonus(spIds) {
+  let 加 = 0;
+  for (const id of spIds || []) {
+    const c = sectCfg(id);
+    const m = c && c.eff && /(?:^|,)dayallexp:(-?\d+)/.exec(c.eff);
+    if (m) 加 += +m[1];
+  }
+  return 加;
+}
+
+/*
+ * 這個人今天長多少經驗。**出門在外的整個領不到空閒那份**——每日結算先把
+ * 出任務的挑掉，剩下的才發，所以派出去就只有任務那份。
+ * 空閒加成同理，喜靜勿動三階一天多一千，是底份的五倍。
+ */
+function sectDayExp(econ, 任務經驗, spIds) {
   const e = econ || SECT_ECON;
-  return e.dayExp + (有派遣 ? (e.taskExp || 0) : 0);
+  return 任務經驗 || (e.dayExp + sectIdleBonus(spIds));
 }
 
 /* 弟子等級表：升到某一級累計要多少經驗。表在靜態檔裡，沒有就退回估算 */
@@ -8673,6 +8707,21 @@ function sectReachOne(state, targets, keepIds, opt) {
   return out;
 }
 
+/* 從現在的等級與經驗出發，走到某一級要幾天 */
+function sectDaysToLevel(level, exp, 目標, dayExp) {
+  const step = dayExp || SECT_ECON.dayExp;
+  let d = 0, lv = level, e2 = exp || 0;
+  while (lv < 目標 && d < 4000) {
+    d += 1; e2 += step;
+    for (;;) {
+      const need = sectExpNeed(lv, lv + 1);
+      if (lv >= SECT_LEVEL_CAP || need <= 0 || e2 < need) break;
+      e2 -= need; lv += 1;
+    }
+  }
+  return d;
+}
+
 /*
  * 每一級停得住幾天。回傳一支查詢函式，給 0 就是那一級停不住。
  *
@@ -8700,18 +8749,7 @@ function sectRestLevels(level, exp, dayExp) {
   days.set(level, (days.get(level) || 0) + 1);
   const f = lv2 => (lv2 >= SECT_LEVEL_CAP ? Infinity : (days.get(lv2) || 0));
   /* 走到那一級要等幾天，挑人的時候要把這段等待算進去 */
-  f.幾天到 = lv2 => {
-    let d = 0, l2 = level, e3 = exp || 0;
-    while (l2 < lv2 && d < 4000) {
-      d += 1; e3 += step;
-      for (;;) {
-        const need = sectExpNeed(l2, l2 + 1);
-        if (l2 >= SECT_LEVEL_CAP || need <= 0 || e3 < need) break;
-        e3 -= need; l2 += 1;
-      }
-    }
-    return d;
-  };
+  f.幾天到 = lv2 => sectDaysToLevel(level, exp, lv2, step);
   return f;
 }
 
@@ -8881,7 +8919,10 @@ function sectSimulate(rows, people, econ, opt) {
    */
   const o = Object.assign({ zhang: 0, maxDays: 3000, 派遣: true, 回復道具: false },
     opt || {});
-  const 每天回令 = o.回復道具 ? e.zhangDayItem : e.zhangDay;
+  const 掛著 = new Set(o.寶物 || []);
+  const 每天回令 = 掛著.has('beiyue') ? e.zhangDayItem : e.zhangDay;
+  /* 戰神鼓只加派遣時的戰力，弟子本身的戰力不動 */
+  const 派遣戰力 = 1 + (掛著.has('zhangu') ? (e.taskPowerUp || 0) : 0);
 
   /* 每個要動的人給一個活的狀態，整場模擬都在同一份上面推 */
   const 演員 = rows.map(r => {
@@ -8901,6 +8942,8 @@ function sectSimulate(rows, people, econ, opt) {
   const 名對演員 = new Map(演員.map(a => [a.name, a]));
   let zhang = o.zhang;
   let 上次買 = -e.buyCd;
+  /* 下一次洗得了是第幾天。帶小數，因為冷卻不見得剛好是整天 */
+  let 洗冷卻到 = 0;
   const days = [];
   /* 走岔與盲洗的次數。對帳器靠這兩個抓「估算跟實跑對不上」 */
   let 岔幾次 = 0, 盲洗幾次 = 0, 重算幾次 = 0;
@@ -8955,18 +8998,19 @@ function sectSimulate(rows, people, econ, opt) {
         const 活 = a && a.等到 < day ? a.state : null;
         return {
           name: p.name,
-          power: 活 ? sectPower(活.level, p.weaponLv, p.armorLv) : p.power,
+          power: Math.floor((活 ? sectPower(活.level, p.weaponLv, p.armorLv)
+            : p.power) * 派遣戰力),
           spIds: 活 ? 活.spIds : p.spIds,
         };
       }), { tasks: e.tasks || SECT_DAILY_TASKS });
       今天.派 = 派.排;
     }
 
-    /* 三、四、發經驗然後升級。派出去的拿任務的，沒派到的拿空閒那份 */
+    /* 三、四、發經驗然後升級。底份人人有，任務那份加上去，空閒的另外吃特長加成 */
     for (const a of 演員) {
       if (a.等到 >= day || !a.缺.length) continue;
       const 得 = 派 ? (派.得到.get(a.name) || 0) : 0;
-      a.exp += 得 || e.dayExp;
+      a.exp += sectDayExp(e, 得, a.state.spIds);
       let 升 = 0;
       while (a.state.level < SECT_LEVEL_CAP) {
         const 要 = sectExpNeed(a.state.level, a.state.level + 1);
@@ -9001,8 +9045,10 @@ function sectSimulate(rows, people, econ, opt) {
      *
      * 只有兩種情況重算：手上沒有路，或者升過頭錯過了計畫要的那一級。
      */
+    /* 規劃中的人不派遣，每天就是底份加自己的空閒加成 */
+    const 每天長 = a => e.dayExp + sectIdleBonus(a.state.spIds);
     const 重算 = a => {
-      a.停 = sectRestLevels(a.state.level, a.exp, e.dayExp);
+      a.停 = sectRestLevels(a.state.level, a.exp, 每天長(a));
       /*
        * 傳整組目標，不能只傳還缺的那幾條。**已經拿到的那幾格要保住**，
        * 解算得知道它們在，才不會排出「把農家子洗掉再換回來」這種路。
@@ -9029,22 +9075,66 @@ function sectSimulate(rows, people, econ, opt) {
       const g = sectFreeSlots(a.state, 保);
       return g.length ? g : [a.state.spIds.length + 1];
     };
-    let 次 = e.rerollPerDay;
-    while (次 > 0 && zhang >= SECT_REROLL_COST) {
+    /* 這一級還剩幾天。滿級的不再升，想洗幾次都行 */
+    const 剩幾天 = a => {
+      if (a.state.level >= SECT_LEVEL_CAP) return Infinity;
+      const 要 = sectExpNeed(a.state.level, a.state.level + 1);
+      return Math.ceil(Math.max(0, 要 - a.exp) / 每天長(a));
+    };
+    /* 這一級剩下的天數扣掉這一步還要洗的次數。一天只洗得了一次，所以這是餘裕 */
+    const 寬裕 = a => {
+      const 那步 = 這一步(a);
+      return 那步 ? 剩幾天(a) - (那步.rolls - a.洗到) : Infinity;
+    };
+    /*
+     * 令是全門派共用的，而且一次二十、每天只回十。有人正在爬向某一級、
+     * 那一級又停不了幾天，到那天現領的份不夠洗完整步，就要先把差額存下來
+     * ——窗口一關整條路作廢，滿級的人晚幾天洗結果一模一樣。
+     * 快到了才存：太早存會讓沒有期限的人整段時間都動不了，天數反而更長。
+     */
+    const 要留的令 = 誰 => {
+      let 留 = 0;
+      for (const b of 演員) {
+        if (b === 誰 || !b.缺.length || b.等到 >= day) continue;
+        const 那步 = 這一步(b);
+        if (!那步 || 那步.state.level <= b.state.level) continue;
+        const 停幾天 = b.停 ? b.停(那步.state.level) : Infinity;
+        if (!isFinite(停幾天)) continue;
+        const 差 = Math.max(0,
+          那步.rolls * SECT_REROLL_COST - (停幾天 - 1) * 每天回令);
+        if (!差) continue;
+        const 到那級幾天 = sectDaysToLevel(b.state.level, b.exp,
+          那步.state.level, 每天長(b));
+        if (到那級幾天 > Math.ceil(差 / 每天回令)) continue;
+        留 += 差;
+      }
+      return Math.min(留, e.zhangMax);
+    };
+
+    /*
+     * 洗的節奏是冷卻決定的，不是每天發一張券。差別只在窗口很窄的時候：
+     * 某一級只停兩天卻要連洗三次，冷卻砍三成就多擠得出那一次，整條路才走得完。
+     * 平常看不出來——令一天回十幾點、洗一次二十，令先見底，冷卻用不完。
+     */
+    const 冷卻 = (1 / (e.rerollPerDay || 1))
+      * (掛著.has('sheli') ? (1 - (e.rerollCdCut || 0)) : 1);
+    if (洗冷卻到 < day) 洗冷卻到 = day;
+    while (洗冷卻到 < day + 1 && zhang >= SECT_REROLL_COST) {
       /*
        * 排得上的兩種：已經升到計畫要的那一級，還有根本算不出路的
-       * ——算不出路代表等下去也沒有更好的局面，推一發才有新的。等最久的先。
-       */
-      /*
-       * 一天只有一次機會，人多的時候要搶，等最久的先。
-       * 試過改讓「那一級快升上去」的人插隊，反而更糟：低等新人每一級都只停
-       * 一兩天，會一路插隊，而他們的路本來就最容易失效。
+       * ——算不出路代表等下去也沒有更好的局面，推一發才有新的。
+       *
+       * 誰先洗：**有路的排在盲洗前面，然後餘裕最少的先**。
+       * 盲洗排前面的話，十七個人那種需求會被盲洗吃光每一天，整包做不完。
        */
       const 能動 = 演員.filter(a => a.缺.length && a.等到 < day
         && (這一步(a) ? 這一步(a).state.level <= a.state.level : true))
-        .sort((x, y) => y.卡了 - x.卡了);
-      if (!能動.length) break;
-      const a = 能動[0];
+        .sort((x, y) => ((這一步(x) ? 0 : 1) - (這一步(y) ? 0 : 1))
+          || (寬裕(x) - 寬裕(y)) || (y.卡了 - x.卡了));
+      /* 窗口會關的人照洗，沒有期限的要讓出存起來的那一份 */
+      const a = 能動.find(x => (這一步(x) && x.state.level < SECT_LEVEL_CAP)
+        || zhang - 要留的令(x) >= SECT_REROLL_COST);
+      if (!a) break;
       const st = 這一步(a);
       if (!st) 盲洗幾次 += 1;
       const 空 = 空格(a);
@@ -9054,7 +9144,7 @@ function sectSimulate(rows, people, econ, opt) {
       const slot = (該動 != null && 空.indexOf(該動) >= 0) ? 該動 : 空[0];
       const one = a.state.rerollLog(slot, e.tag || SECT_TAG_REROLL, 1)[0];
       zhang -= SECT_REROLL_COST;
-      次 -= 1;
+      洗冷卻到 += 冷卻;
       a.洗過 += 1;
       const 中 = a.缺.indexOf(one.got) >= 0;
       if (中) { a.缺 = a.缺.filter(t => t !== one.got); a.卡了 = 0; }
@@ -9222,7 +9312,8 @@ function sectCostRow(stu, combos, opt) {
    * 只挑停得住的等級。算出「先升到某一級再連換三次」而那一級只停一天的話，
    * 那條路走不到，照著排時程一定漂掉。
    */
-  o.levelDays = sectRestLevels(st.level, stu.exp || 0, o.dayExp);
+  o.levelDays = sectRestLevels(st.level, stu.exp || 0,
+    (o.dayExp || SECT_ECON.dayExp) + sectIdleBonus(st.spIds));
   /*
    * 先把「這個弟子第一步換得到哪幾條、各要幾次」一次掃出來。
    * 每一種疊法的第一步走的都是同一條路，各算一次等於同樣的事做十幾遍。
@@ -9584,6 +9675,7 @@ function buildSectEngine(save) {
 root.Sect = {
   BOUND: SECT_BOUND, LEVEL_CAP: SECT_LEVEL_CAP, PROPS: SECT_PROPS,
   REROLL_COST: SECT_REROLL_COST, ECON: SECT_ECON, DAILY_TASKS: SECT_DAILY_TASKS,
+  TREASURES: SECT_TREASURES, TREASURE_MAX: SECT_TREASURE_MAX,
   taskRate: sectTaskRate, dispatch: sectDispatch, power: sectPower,
   expTo: sectExpTo, expNeed: sectExpNeed,
   Student: SectStudent, whale: sectWhale,
@@ -14162,11 +14254,12 @@ const SE = {
   代: 0,            // 換一次設定就加一，舊的那輪自己停掉
   舊了: false,      // 設定改過但還沒重算
   pick: null,       // 攤開誰的走法
+  掃單: 0,          // 深掃時看哪一份需求
   編輯: null,       // 自己配一組時，暫存挑到哪幾條
   kind: 'life',     // 自己配的時候看哪一批
-  pool: 8,
+  pool: 10,
   /* 每天能做多少。派遣給的經驗遠大於空閒自己長的，所以這個值影響天數很大 */
-  設: { 派遣: true, 一天幾次: 1, 掌門令: null, 回復道具: false, 招新人: 0 },
+  設: { 派遣: true, 一天幾次: 1, 掌門令: null, 寶物: [], 招新人: 0 },
   新人: null,
 };
 
@@ -14268,9 +14361,17 @@ function 畫設定() {
     v => { SE.設.掌門令 = v; });
   const 道 = $('seOptItem');
   道.textContent = '';
-  鈕群(道, [[false, '沒有'], [true, '有，一天回 ' + Sect.ECON.zhangDayItem]],
-    v => SE.設.回復道具 === v,
-    v => { SE.設.回復道具 = v; 畫設定(); if (SE.結果) 畫時程(); });
+  const 掛著 = SE.設.寶物;
+  分組框(道, '鎮派之寶', Sect.TREASURES.map(t => [t.key, t.name]),
+    v => 掛著.indexOf(v) >= 0,
+    v => {
+      const i = 掛著.indexOf(v);
+      if (i >= 0) 掛著.splice(i, 1);
+      else 掛著.push(v);
+    },
+    () => { 畫設定(); if (SE.結果) 畫時程(); },
+    /* 位子只有三個，滿了就不讓再挑，已經掛著的照樣能拿下來 */
+    v => 掛著.indexOf(v) >= 0 || 掛著.length < Sect.TREASURE_MAX);
   /* 招募池一天刷一次，所以「往後幾批」等於「願意等幾天」 */
   const 新 = $('seOptNew');
   新.textContent = '';
@@ -14426,7 +14527,7 @@ function 收工() {
   for (const 點 of 挑點) {
     if (點.估天 === 0) { 點.天 = 0; 點.洗 = 0; continue; }
     const s2 = Sect.simulate(點.rows, g.人, { rerollPerDay: SE.設.一天幾次 },
-      { zhang: SE.設.掌門令 || 0, 派遣: SE.設.派遣, 回復道具: SE.設.回復道具 });
+      { zhang: SE.設.掌門令 || 0, 派遣: SE.設.派遣, 寶物: SE.設.寶物 });
     點.天 = s2.總天數 || 0;
     點.洗 = s2.洗幾次;
   }
@@ -14442,9 +14543,10 @@ function 收工() {
   $('seRunTxt').hidden = true;
   $('seProg').value = 1;
   畫按鈕();
+  /* 先藏上一輪的詳情再重畫，順序反過來會把這一輪剛攤開的又蓋回去 */
+  $('seDetail').hidden = true;
   畫恆山結果();
   畫時程();
-  $('seDetail').hidden = true;
 }
 
 /* 跟洗脈同一組：計算中露終止，閒置露開始 */
@@ -14502,10 +14604,11 @@ function 畫恆山結果() {
   r.rows.forEach((row, i) => {
     if (row.plan.steps.length) trs[i].classList.add('canex');
   });
-  /* 算完就把第一個有事做的人攤開，不然玩家不知道這張表點得開 */
+  /* 算完就把第一個有事做的人攤開，不然玩家不知道這張表點得開。
+   * 全員都不用動也照樣攤開第一個，人名那一排是深掃唯一的入口 */
   if (SE.pick == null) {
     const i = r.rows.findIndex(x => x.plan.steps.length);
-    if (i >= 0) 開走法(i);
+    開走法(i >= 0 ? i : 0);
   }
 }
 
@@ -14525,7 +14628,7 @@ function 排時程() {
   const 人 = (eng ? eng.students : []).concat(SE.新人 || []);
   return Sect.simulate(r.rows, 人,
     { rerollPerDay: SE.設.一天幾次 },
-    { zhang: SE.設.掌門令 || 0, 派遣: SE.設.派遣, 回復道具: SE.設.回復道具 });
+    { zhang: SE.設.掌門令 || 0, 派遣: SE.設.派遣, 寶物: SE.設.寶物 });
 }
 
 function 畫時程() {
@@ -14632,25 +14735,43 @@ function 畫時程() {
 /* ---------- 詳情：一個人的走法 ---------- */
 
 function 開走法(idx) {
-  const r = SE.結果 && SE.結果.r.rows[idx];
-  if (!r || !r.plan) return;
+  const R = SE.結果 && SE.結果.r;
+  if (!R) return;
+  /* 沒被分到事的門內弟子也列進來，點了就對他一個人深掃 */
+  const 閒 = R.spare.filter(s => !s.招);
+  if (idx == null || idx >= R.rows.length + 閒.length) return;
   SE.pick = idx;
   $('seDetail').hidden = false;
   $('seDetail').open = true;
   /* 一排人名讓玩家自己切，不然只看得到剛才點的那一個 */
   const who = $('seWho');
   who.textContent = '';
-  鈕群(who, SE.結果.r.rows.map((x, i) => [i, x.name, i === idx ? 'main' : '']),
+  鈕群(who,
+    R.rows.map((x, i) => [i, x.name, i === idx ? 'main' : ''])
+      .concat(閒.map((s, j) => [R.rows.length + j, s.name,
+        R.rows.length + j === idx ? 'main' : ''])),
     i => i === SE.pick, i => 開走法(i));
+  if (idx >= R.rows.length) { 畫深掃(閒[idx - R.rows.length]); return; }
+  const r = R.rows[idx];
+  if (!r.plan) { 畫深掃(r.stu); return; }
   $('seDetailSum').firstChild.nodeValue = escText(r.name) + ' 的走法';
-  $('seDetailHint').textContent = r.plan.rolls
-    ? `換 ${r.plan.rolls} 次，${r.plan.rolls * Sect.REROLL_COST} 掌門令`
-      + (r.plan.ups ? `，先升 ${r.plan.ups} 級` : '')
+  $('seDetailHint').textContent = 走法提示(r.plan);
+  $('seDetailBody').innerHTML = 走法內文(r.stu, r.must, r.plan);
+}
+
+function 走法提示(plan) {
+  return plan.rolls
+    ? `換 ${plan.rolls} 次，${plan.rolls * Sect.REROLL_COST} 掌門令`
+      + (plan.ups ? `，先升 ${plan.ups} 級` : '')
     : '不用動';
+}
+
+/* 走法的內文，分配到的與深掃的畫同一套 */
+function 走法內文(stu, must, plan) {
   /* 玩家照著點的是特長名字，不是格子編號，所以逐次寫「換掉誰、變成誰」 */
   const 列 = [];
   let n = 0;
-  for (const s of r.plan.steps) {
+  for (const s of plan.steps) {
     if (s.up) {
       列.push(`<td class="ctr">—</td><td>先把他練到 ${s.state.level} 級`
         + `（升 ${s.up} 級）</td><td></td>`);
@@ -14663,23 +14784,44 @@ function 開走法(idx) {
         + `<td>${特長名(t.got)}${中了 ? '　★' : ''}</td>`);
     });
   }
-  const 最後 = r.plan.state.spIds.map(特長名).join('　');
+  const 最後 = plan.state.spIds.map(特長名).join('　');
   let 對照 = '';
-  if (r.plan.ups) {
-    const 不升 = Sect.solve(Sect.stateOf(r.stu), r.must,
-      { maxLevels: 0, deepRolls: 60 });
+  if (plan.ups) {
+    const 不升 = Sect.solve(Sect.stateOf(stu), must,
+      { maxLevels: 0, deepRolls: 300 });
     對照 = 不升
       ? `<p class="line">不等升級直接換的話要 ${不升.rolls} 次。</p>`
-      : '<p class="line">不等升級的話六十次以內換不到。</p>';
+      : '<p class="line">不等升級的話三百次以內換不到。</p>';
   }
-  $('seDetailBody').innerHTML = (列.length
+  return (列.length
     ? table(['4em', '', '12em'], [['第幾次', 2], ['做什麼'], ['換到什麼']], 列)
     : '<p class="line">目標已經在身上了，不用動。</p>')
     + `<p class="line">做完身上是：${最後}</p>`
     + 對照
-    + (r.stu.level >= Sect.LEVEL_CAP
+    + (stu.level >= Sect.LEVEL_CAP
       ? '<p class="line">這個弟子練滿了，升不動，所以只能一直換。</p>'
       : '');
+}
+
+/* 批次分配只掃六十次，練滿的弟子六十次外換得到的會被報成換不到，所以單人另掃到三百 */
+function 畫深掃(stu) {
+  const 單 = SE.結果.單;
+  if (SE.掃單 >= 單.length) SE.掃單 = 0;
+  const d = 單[SE.掃單];
+  const 停 = Sect.restLevels(stu.level, stu.exp || 0);
+  const plan = Sect.solve(Sect.stateOf(stu), d.must,
+    { deepRolls: 300, levelDays: 停 });
+  $('seDetailSum').firstChild.nodeValue = escText(stu.name) + ' 的走法';
+  $('seDetailHint').textContent = plan ? 走法提示(plan) : '';
+  $('seDetailBody').innerHTML =
+    '<div class="bar btns-sm" id="seScanPick"></div>'
+    + `<p class="line">身上是：${(stu.spIds || []).map(特長名).join('　')}</p>`
+    + (plan ? 走法內文(stu, d.must, plan)
+      : '<p class="line">三百次以內拿不到。</p>'
+        + (stu.level >= Sect.LEVEL_CAP
+          ? '<p class="line">這個弟子練滿了，升不動，所以只能一直換。</p>' : ''));
+  鈕群($('seScanPick'), 單.map((x, i) => [i, x.名, i === SE.掃單 ? 'main' : '']),
+    i => i === SE.掃單, i => { SE.掃單 = i; 畫深掃(stu); });
 }
 
 /* ---------- 招募池 ---------- */
@@ -14688,15 +14830,15 @@ function 畫招募池() {
   const eng = 恆山引擎();
   if (!eng) return;
   $('sePool').hidden = false;
-  $('sePool').open = true;
   const list = Sect.pool(eng.stuSeed, SE.pool);
-  $('sePoolHint').textContent = `往後 ${SE.pool} 個`;
+  $('sePoolHint').textContent = `往後 ${SE.pool / 5} 刷`;
   const rows = list.map((st, i) => {
     const 練滿 = st.clone();
     練滿.enroll();
     練滿.grow(Sect.LEVEL_CAP);
     const 加點 = Sect.PROPS.map(k => `${PROP_ZH_SECT[k]}${練滿.lvProp[k]}`).join('　');
-    return `<td class="ctr">${i + 1}</td>`
+    return `<td class="ctr">${i % 5 === 0 ? `第 ${i / 5 + 1} 刷` : ''}</td>`
+      + `<td class="ctr">${i % 5 + 1}</td>`
       + `<td class="ctr">${st.sex === 2 ? '女' : '男'}</td>`
       + `<td class="num">${st.bornStr}</td><td class="num">${st.bornDex}</td>`
       + `<td class="num">${st.bornCon}</td><td class="num">${st.bornInt}</td>`
@@ -14704,11 +14846,14 @@ function 畫招募池() {
       + `<td>${加點}</td>`;
   });
   $('sePoolBody').innerHTML = table(
-    ['3em', '3em', '3.5em', '3.5em', '3.5em', '3.5em', '9em', ''],
-    [['第幾個', 2], ['性別', 2], ['力', 1], ['敏', 1], ['體', 1], ['智', 1],
+    ['4em', '3em', '3em', '3.5em', '3.5em', '3.5em', '3.5em', '9em', ''],
+    [['第幾刷', 2], ['第幾個', 2], ['性別', 2], ['力', 1], ['敏', 1], ['體', 1], ['智', 1],
       ['特長'], ['練滿的加點']],
     rows, 5)
-    + '<p class="line">這幾個在你按下刷新之前就定了。每刷新一次換掉五個。</p>';
+    + '<p class="line">這幾個在你按下刷新之前就定了。每刷新一次換掉五個。</p>'
+    + '<div class="bar btns-sm" id="sePoolMore"></div>';
+  鈕群($('sePoolMore'), [[100, '再往後 100 個', '']], () => false,
+    () => { SE.pool += 100; 畫招募池(); });
 }
 
 /* ---------- 整頁 ---------- */
@@ -14732,6 +14877,7 @@ function paintS() {
   畫需求();
   畫設定();
   畫按鈕();
+  畫招募池();
   if (SE.編輯) { 畫分類(); 畫特長清單(); }
   if (SE.結果) { 畫恆山結果(); 畫時程(); }
   if (SE.pick != null) 開走法(SE.pick);
@@ -15332,7 +15478,7 @@ $('rForm').addEventListener('click', () => window.open(RPT_FORM, '_blank', 'noop
  * 內容住在 webui/更新紀錄.txt，那是一份純文字，怎麼寫在它自己的開頭寫著。
  * 這裡只負責把它畫出來，打包的時候才換進來。
  */
-const 更新紀錄 = [{"版":"1.3.0","組":[["新增:紅劍(不穩定版)","新增:恆山派弟子(不穩定版)","新增:直接查看背包裝備詳情，無需再透過篩選功能硬選","新增:卡片現在有不存檔的返回鍵了"],["調整:調整開發政策，不再支援未來遊戲存檔","調整:現在刪除只需要按一次，小心!","調整:更新CP值的算法，現在應該更實際了","調整:內部各大程式的邏輯重構，減少維護負擔","調整:內部UI程式的邏輯重構，減少維護負擔","調整:重構UI核心，減少維護負擔"],["修復:某些運算次數偷偷掃十六倍被抓到了","修復:操作性質的輕微問題"],["新增:一張蘿蔔的畢業照片"]]},{"版":"1.2.2","組":[["新增:免責聲明"],["調整:洗脈的下限計算現在會顯示更低的數字，更符合人類肉眼預估值，不影響最終結果","調整:在芒晶的相關提示中新增廟會的文字"],["修復:洗脈現在會正確的看見身上已經準備好的衝突紫脈，核心算法不變，因此仍可能會捨棄該路線(持續關注中)","修復:不再追蹤週年合照裡面的二維化裝備","修復:裝備的邏輯重構，減少維護負擔","修復:操作性質的輕微問題"],["修復:蘿蔔被澆太多水的問題"]]},{"版":"1.2.1","組":[["新增:登入提示"],["調整:稍微改善洗脈的文字說明"],["修復:裝備篩選邏輯，現在塞北的裁縫賣戒指和掛墜卻自己不幫忙打造，導致篩選篩不出來的問題解決了","修復:裝備篩選邏輯，現在當加入多個地區詞條在同個卡片時，只符合非第一個地區詞條的裝備篩選篩不出來的問題解決了","修復:裝備篩選邏輯，當對戒指搜尋道具附加穿甲時，不再會因為詞條沒有穿甲而直接捨棄了，其他裝備同理","修復:裝備篩選邏輯，現在對詞條的搜尋和對道具的搜尋完全拆開，不再會因為搜尋詞條350攻擊而被隕鐵橫空攔截了","修復:裝備篩選邏輯，現在在卡片編輯時，切換部位的當下就會即時切換正確的屬性選單","修復:裝備詞條顯示，現在不會有偽裝成13免詞條的11免內甲了","修復:裝備詞條顯示，現在按照遊戲內顯示方式無條件捨去，並對配合遊戲內顯示畫面對篩選邏輯做輕微的調整","修復:裝備詳情裡沒有正確顯示原生詞條的問題","修復:大量內部邏輯的問題","修復:操作性質的輕微問題"],["修復:蘿蔔沒有被澆到水的問題"]]},{"版":"1.2.0","組":[["新增:問題回報，問題和建議直接開表單回報"],["修復:裝備的附加屬性那一排排不下的時候會換行，不再被切掉","修復:大量內部邏輯的問題","修復:操作性質的輕微問題"],["調整:下調蘿蔔碰見芋頭的機率"]]},{"版":"1.1.4","組":[["調整:調整登入提示的報錯log"],["修復:蘿蔔暈碳的問題"]]},{"版":"1.1.3","組":[["新增:現在登入時新增裝置碼檔的複選提供項目"],["調整:調整登入提示的報錯log"],["修復:操作性質的輕微問題"],["調整:幫蘿蔔點了一盤肉"]]},{"版":"1.1.2","組":[["新增:登入提示的報錯log"],["修復:解決了裝備結算錯誤的計算了不存在的詞條的問題"],["修復:蘿蔔掉進火鍋的問題"]]},{"版":"1.1.1","組":[["首次公開發布"],["調整:讓蘿蔔出差了一天"]]},{"版":"1.1.0","組":[["新增:洗脈可以比較雙更之後的結果","新增:洗脈計算過程會以多核功能加速","新增:現在所有計算過程會先於結果列出來，不用等到全部算完","新增:現在網站會記住使用者的卡片和喜好","新增:裝備詳情頂端補上標籤文字","新增:頁尾倉庫網址"],["調整:洗脈算出來的路線更省丹了","調整:洗脈新增多核功能","調整:洗脈用詞改成白話"],["修復:手機上的頭欄縮成一行，選項排不下就換行","修復:洗脈的組別點下去就能改，不用再多按一步","修復:裝備詳情在兩個頁面之間切換會整頁壞掉","修復:洗脈的下限一直是空的","修復:洗脈的保底紫重新觸發歸零時機的輕微錯誤","修復:保底那張表的用詞改成白話","修復:存檔打不開的時候改講人話，不再丟一串看不懂的字"],["調整:為蘿蔔添了一杯咖啡"]]},{"版":"1.0.0","組":[["新增:第一版——洗脈、打造、找裝備"],["新增:一顆蘿蔔"]]}];
+const 更新紀錄 = [{"版":"1.3.1","組":[["新增:單獨查看單一弟子長序列的功能"],["修復:修復恆山計算bug，現在會正確計算喜聞樂見、任務經驗、派同一個人做多任務、非空閒經驗"],["調整:優化算法，現在會正確的存令，短時間洗特長，弟子終於會互相禮讓別的弟子先洗專長"],["調整:調整了蘿蔔的作息"]]},{"版":"1.3.0","組":[["新增:紅劍(不穩定版)","新增:恆山派弟子(不穩定版)","新增:直接查看背包裝備詳情，無需再透過篩選功能硬選","新增:卡片現在有不存檔的返回鍵了"],["調整:調整開發政策，不再支援未來遊戲存檔","調整:現在刪除只需要按一次，小心!","調整:更新CP值的算法，現在應該更實際了","調整:內部各大程式的邏輯重構，減少維護負擔","調整:內部UI程式的邏輯重構，減少維護負擔","調整:重構UI核心，減少維護負擔"],["修復:某些運算次數偷偷掃十六倍被抓到了","修復:操作性質的輕微問題"],["新增:一張蘿蔔的畢業照片"]]},{"版":"1.2.2","組":[["新增:免責聲明"],["調整:洗脈的下限計算現在會顯示更低的數字，更符合人類肉眼預估值，不影響最終結果","調整:在芒晶的相關提示中新增廟會的文字"],["修復:洗脈現在會正確的看見身上已經準備好的衝突紫脈，核心算法不變，因此仍可能會捨棄該路線(持續關注中)","修復:不再追蹤週年合照裡面的二維化裝備","修復:裝備的邏輯重構，減少維護負擔","修復:操作性質的輕微問題"],["修復:蘿蔔被澆太多水的問題"]]},{"版":"1.2.1","組":[["新增:登入提示"],["調整:稍微改善洗脈的文字說明"],["修復:裝備篩選邏輯，現在塞北的裁縫賣戒指和掛墜卻自己不幫忙打造，導致篩選篩不出來的問題解決了","修復:裝備篩選邏輯，現在當加入多個地區詞條在同個卡片時，只符合非第一個地區詞條的裝備篩選篩不出來的問題解決了","修復:裝備篩選邏輯，當對戒指搜尋道具附加穿甲時，不再會因為詞條沒有穿甲而直接捨棄了，其他裝備同理","修復:裝備篩選邏輯，現在對詞條的搜尋和對道具的搜尋完全拆開，不再會因為搜尋詞條350攻擊而被隕鐵橫空攔截了","修復:裝備篩選邏輯，現在在卡片編輯時，切換部位的當下就會即時切換正確的屬性選單","修復:裝備詞條顯示，現在不會有偽裝成13免詞條的11免內甲了","修復:裝備詞條顯示，現在按照遊戲內顯示方式無條件捨去，並對配合遊戲內顯示畫面對篩選邏輯做輕微的調整","修復:裝備詳情裡沒有正確顯示原生詞條的問題","修復:大量內部邏輯的問題","修復:操作性質的輕微問題"],["修復:蘿蔔沒有被澆到水的問題"]]},{"版":"1.2.0","組":[["新增:問題回報，問題和建議直接開表單回報"],["修復:裝備的附加屬性那一排排不下的時候會換行，不再被切掉","修復:大量內部邏輯的問題","修復:操作性質的輕微問題"],["調整:下調蘿蔔碰見芋頭的機率"]]},{"版":"1.1.4","組":[["調整:調整登入提示的報錯log"],["修復:蘿蔔暈碳的問題"]]},{"版":"1.1.3","組":[["新增:現在登入時新增裝置碼檔的複選提供項目"],["調整:調整登入提示的報錯log"],["修復:操作性質的輕微問題"],["調整:幫蘿蔔點了一盤肉"]]},{"版":"1.1.2","組":[["新增:登入提示的報錯log"],["修復:解決了裝備結算錯誤的計算了不存在的詞條的問題"],["修復:蘿蔔掉進火鍋的問題"]]},{"版":"1.1.1","組":[["首次公開發布"],["調整:讓蘿蔔出差了一天"]]},{"版":"1.1.0","組":[["新增:洗脈可以比較雙更之後的結果","新增:洗脈計算過程會以多核功能加速","新增:現在所有計算過程會先於結果列出來，不用等到全部算完","新增:現在網站會記住使用者的卡片和喜好","新增:裝備詳情頂端補上標籤文字","新增:頁尾倉庫網址"],["調整:洗脈算出來的路線更省丹了","調整:洗脈新增多核功能","調整:洗脈用詞改成白話"],["修復:手機上的頭欄縮成一行，選項排不下就換行","修復:洗脈的組別點下去就能改，不用再多按一步","修復:裝備詳情在兩個頁面之間切換會整頁壞掉","修復:洗脈的下限一直是空的","修復:洗脈的保底紫重新觸發歸零時機的輕微錯誤","修復:保底那張表的用詞改成白話","修復:存檔打不開的時候改講人話，不再丟一串看不懂的字"],["調整:為蘿蔔添了一杯咖啡"]]},{"版":"1.0.0","組":[["新增:第一版——洗脈、打造、找裝備"],["新增:一顆蘿蔔"]]}];
 
 function paintU() {
   const host = $('uRows'); host.textContent = '';
@@ -15626,7 +15772,6 @@ const 找裝備詳情 = (() => {
 Sect.useData(SECT_STATIC);
 $('hSeGo').addEventListener('click', () => { show('S'); });
 $('seBack').addEventListener('click', back);
-$('sePoolGo').addEventListener('click', () => { 畫招募池(); });
 $('seKind').addEventListener('click', e => {
   const b = e.target.closest('[data-kind]');
   if (!b) return;
