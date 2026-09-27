@@ -420,6 +420,7 @@ main.panel:not(.home) > .bar2 + *{margin-top:0}
 .disclaim.calm{color:var(--ink);border-color:var(--ink);font-size:var(--f3);
   margin-top:var(--s2)}
 .disclaim.calm a{color:inherit;word-break:break-all}
+#hWarn .disclaim strong{color:var(--bad)}
 /* 卡片上的無限置換符號：接在名字右邊、跟著字上下置中，用掉了畫斜線槓掉並轉淡 */
 .inf{display:inline-block;line-height:0;margin-left:var(--s1);vertical-align:-0.15em}
 .inf svg{width:1.1em;height:1.1em;fill:none;stroke:var(--ink2);stroke-width:1.8;
@@ -1068,7 +1069,9 @@ button.brand{background:none;border:none;padding:0;cursor:pointer;
 
 <main class="panes panel home" id="sL">
   <div class="wide" id="hWarn">
-    <p class="disclaim">遊戲0071340版本以上之存檔不受支援</p>
+    <p class="disclaim calm">
+      <strong>遊戲 0071340 以上版本存檔不受支援</strong>
+    </p>
   </div>
   <div id="hZone1">
     <div class="box float save" id="hSave">
